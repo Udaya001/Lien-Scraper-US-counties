@@ -1,8 +1,12 @@
 from scrapper.lien_scrapper import LienScraper
+import time
 
 if __name__ == "__main__":
     base_url = "https://yumacountyaz-recweb.tylerhost.net"
     scrapper = LienScraper(base_url)
+
+    
+    start_time = time.time()
 
     if scrapper.login():
         print("[+] Login successful!")
@@ -24,3 +28,6 @@ if __name__ == "__main__":
             print("[-] Search failed, skipping document processing.")
     else:
         print("[-] Login failed, exiting script.")
+    
+    total_execution_time = time.time()-start_time
+    print(f"Total time taken: {total_execution_time}")
