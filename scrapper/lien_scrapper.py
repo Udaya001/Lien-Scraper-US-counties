@@ -1,0 +1,239 @@
+import os
+import logging
+import requests
+from bs4 import BeautifulSoup
+from urllib.parse import urljoin,urlparse
+import re 
+import csv 
+
+class LienScraper:
+    def __init__(self, base_url):
+        self.base_url = base_url.rstrip("/")  # Remove trailing slash
+        self.session = requests.Session()
+        self.default_headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
+        }
+        self.output_dir = r"D:\web_scrapper\scrapper-project\output"
+        self.text_dir = os.path.join(self.output_dir,"texts")
+        self.pdf_dir = os.path.join(self.output_dir,"pdfs")
+        self.html_dir = os.path.join(self.output_dir,"htmls")
+        os.makedirs(self.output_dir, exist_ok=True)
+        os.makedirs(self.text_dir,exist_ok=True)
+        os.makedirs(self.pdf_dir,exist_ok=True)
+        os.makedirs(self.html_dir,exist_ok=True)
+
+        logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+
+    def login(self):
+        login_url = f"{self.base_url}/recorder/web/loginPOST.jsp"
+        payload = {"guest": "true", "submit": "Public Login"}
+        
+        response = self.session.post(login_url, data=payload, headers=self.default_headers)
+        if response.status_code == 200 and response.url != login_url:
+            logging.info("Login Successful!")
+            return True
+        logging.error(f"Login Failed! Status Code: {response.status_code}")
+        return False
+
+    def search(self, start_date, end_date):
+        search_url = f"{self.base_url}/recorder/eagleweb/docSearchPOST.jsp"
+        payload = {
+            "RecordingDateIDStart": start_date,
+            "RecordingDateIDEnd": end_date,
+            "__search_select": ["AFLR", "AL", "ALR", "CL", "FTAX", "FTXR", "HSP", "HSPP", "HSPR", "MECR", "MECH", "MECA", "MECHPR", "RACK", "RACR", "RELL", "REST", "RLR", "STAX", "SUBL"],
+        }
+        response = self.session.post(search_url, headers=self.default_headers, data=payload)
+        if response.status_code == 200:
+            logging.info("Search Successful")
+            return response.text
+        logging.error(f"Search Failed! Status Code: {response.status_code}")
+        return None
+
+
+
+    def get_search_results(self):
+        search_results_url = f"{self.base_url}/recorder/eagleweb/docSearchResults.jsp?searchId=0"
+        document_links = set()
+
+        while search_results_url:  # Keep fetching until there are no more pages
+            response = self.session.get(search_results_url, headers=self.default_headers)
+
+            if response.status_code != 200:
+                logging.error(f"Failed to fetch search results! Status Code: {response.status_code}")
+                return []
+
+            soup = BeautifulSoup(response.text, "html.parser")
+
+            for link in soup.find_all("a", href=True):
+                href = link["href"]
+                if "viewDoc.jsp?" in href:
+                    absolute_url = urljoin(self.base_url, href)
+
+                    # Fix cases where `/recorder` is missing or `..` appears
+                    if "/recorder" not in urlparse(absolute_url).path:
+                        absolute_url = self.base_url + "/recorder" + href.lstrip("..")
+
+                    # Remove any unintended `..` in URLs
+                    absolute_url = absolute_url.replace("recorder../", "recorder/")
+
+                    document_links.add(absolute_url)
+
+            # Find the "Next" page link
+            next_page_element = soup.find("a", string=re.compile(r"Next", re.IGNORECASE))
+            if next_page_element and "href" in next_page_element.attrs:
+                next_page_url = next_page_element["href"]
+                search_results_url = urljoin(self.base_url, next_page_url)
+                logging.info(f"Moving to next page: {search_results_url}")
+            else:
+                search_results_url = None
+
+        logging.info(f"Found {len(document_links)} unique document links.")
+        return list(document_links)
+
+
+    def fetch_and_save_html(self, url):
+        response = self.session.get(url, headers=self.default_headers)
+        if response.status_code != 200:
+            logging.error(f"Failed to fetch document page! Status code: {response.status_code}")
+            return None
+
+        html_content = response.text
+        # Save the HTML content to a file
+        document_id = url.split("node=")[-1]  # Extract document ID from the URL
+        filename = f"{document_id}.html"
+        filepath = os.path.join(self.html_dir, filename)
+
+        try:
+            with open(filepath, "w", encoding="utf-8") as f:
+                f.write(html_content)  # Save the raw HTML content
+            logging.info(f"HTML file saved to {filepath}")
+        except Exception as e:
+            logging.error(f"Error saving HTML file: {e}")
+        
+        return filepath
+
+
+    def extract_data(self, html_file):
+
+        with open(html_file, "r", encoding="utf-8") as f:
+            soup = BeautifulSoup(f, 'html.parser')
+
+        # Extract Document Number
+        doc_number = soup.find(text="Document Number").find_next("span", class_="text").get_text(strip=True)
+            
+        # Extract Recording Date
+        recording_date = soup.find(text="Recording Date").find_next("span").get_text(strip=True)
+            
+        # Extract Number of Pages
+        num_pages = soup.find(text="Number Pages").find_next("span", class_="text").get_text(strip=True)
+            
+         # Extract Total Fees
+        total_fees = soup.find(text="Total Fees").find_next("span", class_="text").get_text(strip=True)
+            
+        # Extract Address Details
+        company = soup.find(text="Return Address").find_next("span", class_="text").get_text(strip=True)
+        address1 = soup.find(text="Address 1").find_next("span", class_="text").get_text(strip=True)
+        address2 = soup.find(text="Address 2").find_next("span", class_="text").get_text(strip=True)
+        city = soup.find(text="City").find_next("span", class_="text").get_text(strip=True)
+        state = soup.find(text="State").find_next("span", class_="text").get_text(strip=True)
+        zip_code = soup.find(text="Zip").find_next("span", class_="text").get_text(strip=True)
+            
+        # Extract Grantors
+        grantors = [tag.get_text(strip=True) for tag in soup.find(text="Grantor").find_all_next("td", valign="top")]
+            
+        # Extract Grantee
+        grantee = [tag.get_text(strip=True) for tag in soup.find(text="Grantee").find_all_next("td", valign="top")]
+
+
+        # Extract PDF download link
+        pdf_link = None
+        pdf_element = soup.find("a", class_="generator", href=True)
+        if pdf_element:
+            pdf_link = urljoin(self.base_url, pdf_element["href"])
+            
+            if "/recorder/eagleweb" not in pdf_link:
+                pdf_link = pdf_link.replace(self.base_url, self.base_url + "/recorder/eagleweb")
+        logging.info(f"PDF link: {pdf_link}")
+            
+        return {
+                "Document Number": doc_number,
+                "Recording Date": recording_date,
+                "Number of Pages": num_pages,
+                "Total Fees": total_fees,
+                "Return Address": {
+                    "Company": company,
+                    "Address 1": address1,
+                    "Address 2": address2,
+                    "City": city,
+                    "State": state,
+                    "Zip": zip_code
+                },
+                "Grantors": grantors,
+                "Grantee": grantee,
+                "PDF Link":pdf_link
+            }
+    # def download_pdf(self, pdf_url):
+    #     """Downloads and saves the PDF file."""
+    #     if not pdf_url:
+    #         logging.warning("No PDF link found, skipping download.")
+    #         return
+        
+    #     filename = os.path.basename(urlparse(pdf_url).path)  # Extract filename from URL
+    #     filepath = os.path.join(self.pdf_dir, filename)
+    #     try:
+    #         response = self.session.get(pdf_url, headers=self.default_headers, stream=True)
+    #         if response.status_code == 200:
+    #             with open(filepath, "wb") as pdf_file:
+    #                 for chunk in response.iter_content(chunk_size=1024):
+    #                     pdf_file.write(chunk)
+    #             logging.info(f"Downloaded PDF: {filename}")
+    #         else:
+    #             logging.error(f"Failed to download PDF! Status Code: {response.status_code}")
+    #     except requests.RequestException as e:
+    #         logging.error(f"Error downloading PDF: {e}")
+
+    
+    def save_text(self, url, data):
+        document_id = url.split("node=")[-1]  # Extract document ID
+        filename = f"{document_id}.csv"  # Change extension to CSV
+        filepath = os.path.join(self.text_dir, filename)
+
+        try:
+            with open(filepath, "w", newline="", encoding="utf-8") as f:
+                writer = csv.writer(f)
+                
+                # If data is a dictionary, write headers and values
+                if isinstance(data, dict):
+                    writer.writerow(data.keys())   # Write CSV headers
+                    writer.writerow(data.values()) # Write corresponding values
+                elif isinstance(data, list) and all(isinstance(item, dict) for item in data):
+                    # If data is a list of dictionaries, write rows accordingly
+                    writer.writerow(data[0].keys())  # Write headers
+                    for item in data:
+                        writer.writerow(item.values())
+
+            logging.info(f"File saved to {filepath}")
+        except Exception as e:
+            logging.error(f"Error saving file: {e}")
+
+    def process_documents(self, document_links):
+        """Processes each document page: extracts text & downloads PDFs."""
+        for idx, doc_url in enumerate(document_links, 1):
+            logging.info(f"Processing ({idx}/{len(document_links)}): {doc_url}")
+
+            html_file = self.fetch_and_save_html(doc_url)
+            if html_file:
+                data = self.extract_data(html_file)
+                self.save_text(doc_url,data)
+                # Download PDF if the link is available
+                # pdf_url = data.get("PDF Link")
+                # self.download_pdf(pdf_url)
+
+                logging.info(f"Processed document: {html_file}")
+            else:
+                logging.error(f"Failed to process document: {doc_url}")
+
+        logging.info("Processing complete!")
+
+
+
