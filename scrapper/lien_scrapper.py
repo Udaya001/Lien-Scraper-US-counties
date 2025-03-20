@@ -117,7 +117,7 @@ class LienScraper:
         return html_content
 
 
-    def extract_data(self, html_content):#html_file):
+    def extract_data(self, html_content, document_id):#html_file):
 
         # with open(html_file, "r", encoding="utf-8") as f:
         #     soup = BeautifulSoup(f, 'html.parser')
@@ -144,13 +144,85 @@ class LienScraper:
         state = soup.find(text="State").find_next("span", class_="text").get_text(strip=True)
         zip_code = soup.find(text="Zip").find_next("span", class_="text").get_text(strip=True)
             
-        # Extract Grantors
-        grantors = [tag.get_text(strip=True) for tag in soup.find(text="Grantor").find_all_next("td", valign="top")]
+        # Find the <th> tag containing "Grantor"
+        grantor_th = soup.find("th", string=lambda text: text and "Grantor" in text)
+
+        grantor_list = []
+        if grantor_th:
+            # Find all subsequent <td> tags that contain grantor names
+            for td in grantor_th.find_parent("tr").find_next_siblings("tr"):
+                grantor_text = td.get_text(strip=True)  # Get clean text
+                if grantor_text:
+                    grantor_list.append(grantor_text)
+
             
-        # Extract Grantee
-        grantee = [tag.get_text(strip=True) for tag in soup.find(text="Grantee").find_all_next("td", valign="top")]
+                # Extract Grantee
+        # Find the <th> tag containing "Grantee"
+        grantee_th = soup.find("th", string=lambda text: text and "Grantee" in text)
+
+        grantee_list = []
+        if grantee_th:
+            # Find all subsequent <tr> elements containing <td> with grantee names
+            for td in grantee_th.find_parent("tr").find_next_siblings("tr"):
+                grantee_text = td.get_text(strip=True)  # Get clean text
+                if grantee_text:
+                    grantee_list.append(grantee_text)
 
         
+        
+
+
+        payload = {
+            "relatedMode":"allDocs",
+            "sourceDocId":document_id
+        }
+        all_url = f"https://yumacountyaz-recweb.tylerhost.net/recorder/eagleweb/relatedDocsInline.jsp"
+        response_docs = self.session.post(all_url, data=payload)
+        r_html_content = response_docs.text
+
+        soup1 = BeautifulSoup(r_html_content,'html.parser')
+
+        documents = []
+    
+        for td in soup1.find_all('td'):
+            a_tag = td.find('a', class_='trigger')
+            if a_tag:
+                doc_name = a_tag.contents[0].strip()
+                rdoc_number = a_tag.text.split('\n')[-1].strip()
+                doc_link = urljoin(self.base_url,"/recorder/eagleweb/"+a_tag.get('href'))
+                documents.append((rdoc_number, doc_name, doc_link))
+
+
+        # Process each table row
+        # for row in soup.find_all('tr', class_='tableRow2'):
+        #     link = row.find('a')
+        #     if link:
+        #         # Extract and append document number
+        #         doc_numbers.append(link.get('id', '').strip())
+                
+        #         # Extract and append document name (text before first <br>)
+        #         full_text = link.get_text(separator='|').split('|')
+        #         doc_names.append(full_text[0].strip())
+                
+        #         # Extract and append document link
+        #         doc_links.append(link.get('href', '').strip())
+
+
+        # # related_doc_number = soup.find(text="Document Number").find_next("span", class_="text").get_text(strip=True)
+        # related_doc_number_all = soup.find_all(text="Document Number")
+        # related_doc_number = related_doc_number_all[1].find_next("span", class_="text").get_text(strip=True)
+
+
+        # # Extract related document link
+        # related_doc_link = None
+        # if related_doc_number:
+        #     temp_id = related_doc_number.replace("-","0")
+        #     doc_id = "DOCC" + temp_id
+        #     related_doc_link = f"{self.base_url}/recorder/eagleweb/viewDoc.jsp?node={doc_id}"
+
+
+        
+ 
         # Extract PDF download link
         pdf_link = None
         pdf_element = soup.find("a", class_="generator", href=True)
@@ -174,8 +246,9 @@ class LienScraper:
                     "State": state,
                     "Zip": zip_code
                 },
-                "Grantors": grantors,
-                "Grantee": grantee,
+                "Grantors": grantor_list,
+                "Grantee": grantee_list,
+                "Related Documents": documents,
                 "PDF Link":pdf_link
             }
 
@@ -237,12 +310,14 @@ class LienScraper:
     def process_documents(self, document_links):
         #Processes each document page: extracts text & downloads PDFs
         for idx, doc_url in enumerate(document_links, 1):
+            document_id = doc_url.split("node=")[-1] 
+
             logging.info(f"Processing ({idx}/{len(document_links)}): {doc_url}")
 
             html_content = self.fetch_and_save_html(doc_url)
 
             if html_content:
-                data = self.extract_data(html_content)
+                data = self.extract_data(html_content,document_id)
                 self.save_text(doc_url, data)
 
                 # Ensure PDF links are in list format
@@ -255,8 +330,10 @@ class LienScraper:
                 logging.info(f"Processed document: {doc_url}")
             else:
                 logging.error(f"Failed to process document: {doc_url}")
+        
 
         logging.info("Processing complete!")
+
 
 
 

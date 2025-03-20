@@ -31,3 +31,5 @@ if __name__ == "__main__":
     
     total_execution_time = time.time()-start_time
     print(f"Total time taken: {total_execution_time}")
+
+
