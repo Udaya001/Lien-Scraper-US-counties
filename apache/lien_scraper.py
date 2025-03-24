@@ -2,15 +2,17 @@ import os
 import logging
 import requests
 from bs4 import BeautifulSoup
-from urllib.parse import urljoin,urlparse
+from urllib.parse import urljoin,urlparse,parse_qs
 import re 
 import csv
 import time
+import shutil
+import concurrent.futures
 import email.utils 
 
 class LienScraper:
     def __init__(self, base_url):
-        self.base_url = base_url.rstrip("/")  # Remove trailing slash
+        self.base_url = base_url.rstrip("/")  
         self.session = requests.Session()
         
         self.default_headers = {
@@ -33,7 +35,7 @@ class LienScraper:
 
     
 
-        self.output_dir = r"D:\web_scrapper\scrapper-project\output"
+        self.output_dir = r"D:\web_scrapper\apache\output"
         self.text_dir = os.path.join(self.output_dir,"texts")
         self.pdf_dir = os.path.join(self.output_dir,"pdfs")
         os.makedirs(self.output_dir, exist_ok=True)
@@ -69,12 +71,8 @@ class LienScraper:
                 jsessionid = cookie.value
                 break
 
-        #JSESSIONID saved in a variable
         if jsessionid:
             print(f"Found JSESSIONID: {jsessionid}")
-            # with open('session_id.txt', 'w') as f:
-            #     f.write(jsessionid)
-            # print("JSESSIONID saved to session_id.txt")
             return jsessionid
         else:
             print("JSESSIONID not found in cookies")
@@ -124,7 +122,7 @@ class LienScraper:
             "field_PLSSLegalID_DOT_Township": "",
             "field_PLSSLegalID_DOT_Range": "",
             "field_ParcelID": "",
-            "field_selfservice_documentTypes-searchInput": "lien",
+            "field_selfservice_documentTypes-searchInput": ["lien","release"],
             "field_selfservice_documentTypes-containsInput": "Contains Any",
             "field_selfservice_documentTypes": "",
             "field_UseAdvancedSearch": ""
@@ -186,6 +184,7 @@ class LienScraper:
 
     def get_search_results(self,total_pages,timestamp):
         page_number = 1
+        document_links = []
         for page_number in range(1, total_pages + 1):
             try:
                 logging.info(f"Initiating search result for page : {page_number}")
@@ -193,20 +192,19 @@ class LienScraper:
                     'page': page_number,
                     '_': timestamp
                 }
-                document_links = []
 
                 response = self.session.get(f"{self.base_url}/web/searchResults/DOCSEARCH138S1", params=payload, headers=self.default_headers)
 
                 logging.info(f"Result Url: {response.url}")
 
                 if response.status_code == 200:
-                    logging.info("OK")
                     soup = BeautifulSoup(response.text, "html.parser")
-                    logging.info(response)
+
                     for link in soup.find_all("a", href=True):
                         href = link["href"]
                         if "/web/document/" in href:
                             absolute_url = urljoin(self.base_url, href)
+                            logging.info(f"aurl:{absolute_url}")
                             document_links.append(absolute_url)
             except Exception as e:
                 logging.error(f"Error occurred: {e}")
@@ -214,6 +212,222 @@ class LienScraper:
             logging.info("All pages Extracted successfully")
 
         return document_links
+    
+    def fetch_html(self, url):
+        response = self.session.get(url, headers=self.default_headers)
+        if response.status_code != 200:
+            logging.error(f"Failed to fetch document page! Status code: {response.status_code}")
+            return None
+
+        html_content = response.text
+
+        return html_content
+    
+    def extract_data(self, html_content,document_id):
+
+        soup = BeautifulSoup(html_content, 'html.parser')
+
+        # Extract Document Number
+        doc_number_tag = soup.find("strong", string="Document Number:")
+        doc_number = doc_number_tag.find_next("div").text.strip() if doc_number_tag else "N/A"
+            
+        # Extract Recording Date
+        rec_date_tag = soup.find("strong", string="Recording Date:")
+        rec_date = rec_date_tag.find_next("div").text.strip() if rec_date_tag else "N/A"
+
+        #Extract Document Type
+        doc_type = soup.find("li", class_="ui-li-static ui-body-inherit ui-last-child").text.strip()
+
+        names_section = soup.find('li', {'role': 'heading', 'class': 'ui-li-divider'}, text="Names")
+        grantor = []
+        grantee = []
+
+        if names_section:
+            # Get the next sibling <li> containing the table
+            names_content_li = names_section.find_next_sibling('li', class_='ui-li-static')
+            if names_content_li:
+                # Find all rows in the table within the "Names" section
+                table = names_content_li.find('table')
+                if table:
+                    for row in table.find_all('tr'):
+                        # Extract the label (e.g., "Grantor:" or "Grantee:")
+                        label_tag = row.find('strong')
+                        if label_tag:
+                            label = label_tag.get_text(strip=True)
+                            # Extract the corresponding name from the next <div>
+                            name_container = label_tag.find_next('div')
+                            if name_container:
+                                # Handle cases where names are in <ul> or plain text
+                                if name_container.find('ul'):
+                                    names = [item.get_text(strip=True)
+                                              for item in name_container.find_all('li')
+                                              if not item.find('a') and "Show More..." not in item.get_text(strip=True)
+                                            ]
+                                else:
+                                    names = [name_container.get_text(strip=True)]
+                                
+                                if label == "Grantor:":
+                                    grantor.extend(names)
+                                elif label == "Grantee:":
+                                    grantee.extend(names)
+
+        # Locate the "Notes" section by finding the <li> element with role="heading" and text "Notes"
+        notes_heading = soup.find('li', {'role': 'heading', 'class': 'ui-li-divider'}, text='Notes')
+        if notes_heading:
+            # Get the next sibling <li> which contains the actual notes content
+            notes_content_li = notes_heading.find_next_sibling('li', class_='ui-li-static')
+            if notes_content_li:
+                # Extract the text content of the notes
+                notes = notes_content_li.get_text(strip=True)
+                
+            else:
+                notes = ["N/A"]  # Fallback if structure changes
+        else:
+            notes = ["N/A"]  # Fallback if no Notes section
+
+        # Extract Legal Information
+        legal_section = soup.find('li', {'role': 'heading', 'class': 'ui-li-divider'}, text="Legal")
+        if legal_section:
+            legal_content_li = legal_section.find_next_sibling('li', class_='ui-li-static')
+            legal_info = legal_content_li.get_text(strip=True) if legal_content_li else "N/A"
+        else:
+            legal_info = "N/A"
+
+
+        related_url = f"{self.base_url}/web/document/relatedDocuments/{document_id}"
+        response_rdocs = self.session.get(related_url,headers=self.default_headers)
+        rhtml_content = response_rdocs.text
+
+        soup1 = BeautifulSoup(rhtml_content,'html.parser')
+        # Extract document details
+        related_docs = []
+
+        # Find all collapsible rows
+        collapsible_rows = soup1.find_all('div', class_='ss-row related-table-row')
+        for row in collapsible_rows:
+            # Extract document type
+            rdoc_type = row.find('td', class_='related-doc-type')
+            rdoc_type = rdoc_type.text.strip() if rdoc_type else "N/A"
+
+            # Extract recording date
+            related_rdate = row.find('td', class_='related-doc-recording-date')
+            related_rdate = related_rdate.text.strip() if related_rdate else "N/A"
+
+            # Extract external ID (with error handling)
+            external_id_link = row.find('a', class_='document-link')
+            external_id = external_id_link.text.strip() if external_id_link else "N/A"
+
+            # Extract associated names
+            names_div = row.find('div', style="width:50%; float:left")
+            names = [name.strip() for name in names_div.stripped_strings] if names_div else []
+
+            # Append extracted details to the list
+            related_docs.append({
+                'Document Type': rdoc_type,
+                'Recording Date': related_rdate,
+                'External ID': external_id,
+                'Associated Names': names
+            })
+            
+
+        logging.info(document_id)
+        pdf_link = f"{self.base_url}/web/document/servepdf/DEGRADED-{document_id}.1.pdf/{doc_number}.pdf?index"
+
+            
+        return {
+                "Document ID": document_id,
+                "Document Type":doc_type,
+                "Document Number": doc_number,
+                "Recording Date": rec_date,
+                "Grantors": grantor,
+                "Grantees": grantee,
+                "Legal": legal_info,
+                "Notes": notes,
+                "Related Documents": related_docs,
+                "PDF Link":pdf_link
+            }
+    
+
+    def download_pdf(self, pdf_url):
+        # Downloads and saves the PDF file efficiently using a larger buffer.
+        if not pdf_url:
+            logging.warning("No PDF link found, skipping download.")
+            return
+        
+        filename = os.path.basename(urlparse(pdf_url).path)
+        filepath = os.path.join(self.pdf_dir, filename)
+
+        try:
+            response = self.session.get(pdf_url, headers=self.default_headers, stream=True)
+            if response.status_code == 200:
+                with open(filepath, "wb") as pdf_file, response as r:
+                    shutil.copyfileobj(r.raw, pdf_file)
+                logging.info(f"Downloaded PDF: {filename}")
+            else:
+                logging.error(f"Failed to download PDF! Status Code: {response.status_code}")
+        except requests.RequestException as e:
+            logging.error(f"Error downloading PDF: {e}")
+
+    def download_pdfs_concurrently(self, pdf_urls):
+        #   `Downloads multiple PDFs concurrently.
+        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:  # 5 threads
+            executor.map(self.download_pdf, pdf_urls)
+
+
+    
+    def save_text(self, url, data):
+        #Saves extracted text from multiple documents into a single CSV file
+        filename = "all_documents.csv"  # Unified CSV file
+        filepath = os.path.join(self.text_dir, filename)
+
+        write_headers = not os.path.exists(filepath)  # Check if file exists
+
+        try:
+            with open(filepath, "a", newline="", encoding="utf-8") as f:  # Open in append mode
+                writer = csv.writer(f)
+                
+                if isinstance(data, dict):
+                    if write_headers:
+                        writer.writerow( list(data.keys()))  # Write headers
+                    writer.writerow(list(data.values()))  # Append values
+
+                elif isinstance(data, list) and all(isinstance(item, dict) for item in data):
+                    if write_headers:
+                        writer.writerow(["Document ID"] + list(data[0].keys()))  # Write headers
+                    for item in data:
+                        writer.writerow([url.split("node=")[-1]] + list(item.values()))  # Append each row
+
+            logging.info(f"Data appended to {filepath}")
+
+        except Exception as e:
+            logging.error(f"Error saving file: {e}")
+
+    def process_documents(self, document_links):
+        #Processes each document page: extracts text & downloads PDFs
+        for idx, doc_url in enumerate(document_links, 1):
+            parsed_url = urlparse(doc_url)
+            document_id = parsed_url.path.split("/")[-1] 
+            logging.info(f"Processing ({idx}/{len(document_links)}): {doc_url}")
+
+            html_content = self.fetch_html(doc_url)
+
+            if html_content:
+                data = self.extract_data(html_content,document_id)
+                self.save_text(doc_url, data)
+
+                # Ensure PDF links are in list format
+                pdf_urls = data.get("PDF Link")
+                if not isinstance(pdf_urls, list):
+                    pdf_urls = [pdf_urls] if pdf_urls else []  # Convert None to empty list
+
+                self.download_pdfs_concurrently(pdf_urls)
+
+                logging.info(f"Processed document: {doc_url}")
+            else:
+                logging.error(f"Failed to process document: {doc_url}")
+        
+
+        logging.info("Processing complete!")
         
 
 
