@@ -2,12 +2,9 @@ import os
 import logging
 import requests
 from bs4 import BeautifulSoup
-from urllib.parse import urljoin,urlparse,parse_qs
-import re 
+from urllib.parse import urljoin,urlparse
 import csv
-import time
 import shutil
-import concurrent.futures
 import email.utils 
 
 class LienScraper:
@@ -346,19 +343,48 @@ class LienScraper:
                 "Related Documents": related_docs,
                 "PDF Link":pdf_link
             }
+   
+    
     
 
-    def download_pdf(self, pdf_url):
-        # Downloads and saves the PDF file efficiently using a larger buffer.
-        if not pdf_url:
-            logging.warning("No PDF link found, skipping download.")
-            return
-        
+
+    def download_pdf(self, document_id,document_number,sessionID):
+
+        pdf_url_0 = f"{self.base_url}/web/document-image-pdfjs/{document_id}/{document_number}.pdf?allowDownload=true&index=1"
+        pdf_url = f"https://eaglerecorder.co.apache.az.us/web/document/servepdf/DEGRADED-{document_id}.1.pdf/{document_number}.pdf?index"
+        headers = {
+            "Accept": "text/html, */*; q=0.01",
+            "Accept-Encoding": "gzip, deflate, br, zstd",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "Cookie": f"JSESSIONID={sessionID}; disclaimerAccepted=true",
+            "Host": "eaglerecorder.co.apache.az.us",
+            "Pragma": "no-cache",
+            "Referer": f"https://eaglerecorder.co.apache.az.us/web/document/{document_id}",
+            "Sec-Ch-Ua": '"Chromium";v="134", "Not:A-Brand";v="24", "Google Chrome";v="134"',
+            "Sec-Ch-Ua-Mobile": "?0",
+            "Sec-Ch-Ua-Platform": '"Windows"',
+            "Sec-Fetch-Dest": "empty",
+            "Sec-Fetch-Mode": "cors",
+            "Sec-Fetch-Site": "same-origin",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
+            "X-Requested-With": "XMLHttpRequest"
+        }
+
+      
+    
+
         filename = os.path.basename(urlparse(pdf_url).path)
         filepath = os.path.join(self.pdf_dir, filename)
 
+        logging.info(f"pdf url: {pdf_url}")
+
         try:
-            response = self.session.get(pdf_url, headers=self.default_headers, stream=True)
+
+            response = self.session.get(pdf_url_0, headers=headers, stream=True)
+            response = self.session.get(pdf_url, headers=headers, stream=True)
+            # logging.info(response.text)
             if response.status_code == 200:
                 with open(filepath, "wb") as pdf_file, response as r:
                     shutil.copyfileobj(r.raw, pdf_file)
@@ -367,12 +393,6 @@ class LienScraper:
                 logging.error(f"Failed to download PDF! Status Code: {response.status_code}")
         except requests.RequestException as e:
             logging.error(f"Error downloading PDF: {e}")
-
-    def download_pdfs_concurrently(self, pdf_urls):
-        #   `Downloads multiple PDFs concurrently.
-        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:  # 5 threads
-            executor.map(self.download_pdf, pdf_urls)
-
 
     
     def save_text(self, url, data):
@@ -402,7 +422,7 @@ class LienScraper:
         except Exception as e:
             logging.error(f"Error saving file: {e}")
 
-    def process_documents(self, document_links):
+    def process_documents(self, document_links,sessionID):
         #Processes each document page: extracts text & downloads PDFs
         for idx, doc_url in enumerate(document_links, 1):
             parsed_url = urlparse(doc_url)
@@ -414,13 +434,9 @@ class LienScraper:
             if html_content:
                 data = self.extract_data(html_content,document_id)
                 self.save_text(doc_url, data)
+                document_number = data.get("Document Number")
 
-                # Ensure PDF links are in list format
-                pdf_urls = data.get("PDF Link")
-                if not isinstance(pdf_urls, list):
-                    pdf_urls = [pdf_urls] if pdf_urls else []  # Convert None to empty list
-
-                self.download_pdfs_concurrently(pdf_urls)
+                self.download_pdf(document_id,document_number,sessionID)
 
                 logging.info(f"Processed document: {doc_url}")
             else:
@@ -430,12 +446,3 @@ class LienScraper:
         logging.info("Processing complete!")
         
 
-
-
-
-
-
-
-
-
-   

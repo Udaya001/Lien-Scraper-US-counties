@@ -24,7 +24,7 @@ if __name__ == "__main__":
                 print(f"Found {len(document_links)} document links! Processing now...")
 
                 # Process each document: Extract text & download PDFs
-                scrapper.process_documents(document_links)
+                scrapper.process_documents(document_links,sessionID=sessionID)
 
                 print(" All documents processed successfully!")
             else:
@@ -36,5 +36,3 @@ if __name__ == "__main__":
     
     total_execution_time = time.time()-start_time
     print(f"Total time taken: {total_execution_time}")
-
-
