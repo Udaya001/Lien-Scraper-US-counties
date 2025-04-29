@@ -18,11 +18,10 @@ class LienScraper:
         self.output_dir = r"D:\web_scrapper\scrapper-project\output"
         self.text_dir = os.path.join(self.output_dir,"texts")
         self.pdf_dir = os.path.join(self.output_dir,"pdfs")
-        self.html_dir = os.path.join(self.output_dir,"htmls")
         os.makedirs(self.output_dir, exist_ok=True)
         os.makedirs(self.text_dir,exist_ok=True)
         os.makedirs(self.pdf_dir,exist_ok=True)
-        os.makedirs(self.html_dir,exist_ok=True)
+
 
         logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
@@ -36,13 +35,20 @@ class LienScraper:
             return True
         logging.error(f"Login Failed! Status Code: {response.status_code}")
         return False
+    
+
 
     def search(self, start_date, end_date):
         search_url = f"{self.base_url}/recorder/eagleweb/docSearchPOST.jsp"
         payload = {
             "RecordingDateIDStart": start_date,
             "RecordingDateIDEnd": end_date,
-            "__search_select": ["AFLR", "AL", "ALR", "CL", "FTAX", "FTXR", "HSP", "HSPP", "HSPR", "MECR", "MECH", "MECA", "MECHPR", "RACK", "RACR", "RELL", "REST", "RLR", "STAX", "SUBL"],
+            "__search_select": [
+                "AFLR", "AGRR", "AL", "ALR", "CSR", "CL", "DTR", "FTAX", "FTXR", "FTXP",
+                "FTPRV", "HOMR", "HSP", "HSPP", "HSPR", "LR", "LIS", "LISA", "LISR",
+                "MECR", "MECH", "MGR", "RACK", "RACR", "ASR", "LEVR", "RELL", "RN",
+                "REST", "RLR", "RSTR", "STAX", "STXP", "STXR"
+            ],
         }
         response = self.session.post(search_url, headers=self.default_headers, data=payload)
         if response.status_code == 200:
@@ -101,28 +107,14 @@ class LienScraper:
             return None
 
         html_content = response.text
-        # # Save the HTML content to a file
-        # document_id = url.split("node=")[-1]  # Extract document ID from the URL
-        # filename = f"{document_id}.html"
-        # filepath = os.path.join(self.html_dir, filename)
 
-        # try:
-        #     with open(filepath, "w", encoding="utf-8") as f:
-        #         f.write(html_content)  # Save the raw HTML content
-        #     logging.info(f"HTML file saved to {filepath}")
-        # except Exception as e:
-        #     logging.error(f"Error saving HTML file: {e}")
-        
-        # return filepath
         return html_content
 
 
-    def extract_data(self, html_content, document_id):#html_file):
-
-        # with open(html_file, "r", encoding="utf-8") as f:
-        #     soup = BeautifulSoup(f, 'html.parser')
+    def extract_data(self, html_content, document_id):
 
         soup = BeautifulSoup(html_content, 'html.parser')
+
 
         # Extract Document Number
         doc_number = soup.find(text="Document Number").find_next("span", class_="text").get_text(strip=True)
@@ -168,9 +160,6 @@ class LienScraper:
                 if grantee_text:
                     grantee_list.append(grantee_text)
 
-        
-        
-
 
         payload = {
             "relatedMode":"allDocs",
@@ -191,37 +180,6 @@ class LienScraper:
                 rdoc_number = a_tag.text.split('\n')[-1].strip()
                 doc_link = urljoin(self.base_url,"/recorder/eagleweb/"+a_tag.get('href'))
                 documents.append((rdoc_number, doc_name, doc_link))
-
-
-        # Process each table row
-        # for row in soup.find_all('tr', class_='tableRow2'):
-        #     link = row.find('a')
-        #     if link:
-        #         # Extract and append document number
-        #         doc_numbers.append(link.get('id', '').strip())
-                
-        #         # Extract and append document name (text before first <br>)
-        #         full_text = link.get_text(separator='|').split('|')
-        #         doc_names.append(full_text[0].strip())
-                
-        #         # Extract and append document link
-        #         doc_links.append(link.get('href', '').strip())
-
-
-        # # related_doc_number = soup.find(text="Document Number").find_next("span", class_="text").get_text(strip=True)
-        # related_doc_number_all = soup.find_all(text="Document Number")
-        # related_doc_number = related_doc_number_all[1].find_next("span", class_="text").get_text(strip=True)
-
-
-        # # Extract related document link
-        # related_doc_link = None
-        # if related_doc_number:
-        #     temp_id = related_doc_number.replace("-","0")
-        #     doc_id = "DOCC" + temp_id
-        #     related_doc_link = f"{self.base_url}/recorder/eagleweb/viewDoc.jsp?node={doc_id}"
-
-
-        
  
         # Extract PDF download link
         pdf_link = None
